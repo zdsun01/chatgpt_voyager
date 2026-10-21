@@ -1,9 +1,9 @@
 {
   "name": "chatgpt-question-timeline",
   "private": true,
-  "version": "1.0.13",
+  "version": "1.1.0",
   "scripts": {
-    "test": "node tests/timeline.test.cjs && node tests/chat-switch.test.cjs && node tests/virtual-history.test.cjs && node tests/scroll-active.test.cjs"
+    "test": "node tests/timeline.test.cjs && node tests/chat-switch.test.cjs && node tests/virtual-history.test.cjs && node tests/scroll-active.test.cjs && node tests/return-origin.test.cjs"
   },
   "devDependencies": {
     "playwright": "^1.56.0"

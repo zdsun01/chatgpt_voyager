@@ -2,13 +2,14 @@
 
 轻量的 Chrome 扩展，在 ChatGPT 网页右侧显示当前聊天的提问时间线。悬停预览自己的提问，点击跳转，滚动阅读时自动高亮对应节点。
 
-当前版本：**1.0.13**。支持 `chatgpt.com` 和 `chat.openai.com`，采用 Manifest V3。
+当前版本：**1.1.0**。支持 `chatgpt.com` 和 `chat.openai.com`，采用 Manifest V3。
 
 ## 功能
 
 - **提问导航**：只显示自己的提问，不预览模型回答；长问题可在预览框内滚动阅读。
 - **点击跳转**：点击圆点定位到对应提问。
 - **阅读高亮**：随页面滚动自动切换高亮，阅读某次提问下的回答时保持对应节点选中。
+- **返回原文**：选中模型回答里的文字，使用“向 ChatGPT 提问”追问后，一键回到原段落；支持连续追问后逐层返回。
 - **历史累积**：向上加载历史时加入新发现的提问，已加载的最新节点不会因为网页卸载消息而消失。
 - **聊天隔离**：切换聊天立即清空旧节点，避免混入网页缓存的其他会话。
 - **简洁外观**：浅蓝圆点、磨砂玻璃滑轨，支持深色页面。顶部与分享按钮下沿保持 3px 间距，底部留 6px。
@@ -22,7 +23,7 @@
 
 打开 [最新 Release](https://github.com/zdsun01/chatgpt_voyager/releases/latest)，在 **Assets** 中下载 `chatgpt-question-timeline-版本号.zip`，解压后在 Chrome 扩展管理页选择该文件夹即可，不需要 Git 或 `git pull`。
 
-当前安装包：[chatgpt-question-timeline-1.0.13.zip](https://github.com/zdsun01/chatgpt_voyager/releases/download/v1.0.13/chatgpt-question-timeline-1.0.13.zip)。选择插件 ZIP，不要选择 GitHub 自动生成的 Source code 源码包。
+当前安装包：[chatgpt-question-timeline-1.1.0.zip](https://github.com/zdsun01/chatgpt_voyager/releases/download/v1.1.0/chatgpt-question-timeline-1.1.0.zip)。选择插件 ZIP，不要选择 GitHub 自动生成的 Source code 源码包。
 
 ### 从源码安装
 
@@ -36,7 +37,7 @@
 
 ### 更新
 
-用新版文件覆盖原来的扩展目录；使用 Git 克隆安装的，也可以在仓库目录执行 `git pull`。随后在 `chrome://extensions` 中点击本扩展的**重新加载**，再刷新 ChatGPT 页面。当前版本应显示 **1.0.13**。
+用新版文件覆盖原来的扩展目录；使用 Git 克隆安装的，也可以在仓库目录执行 `git pull`。随后在 `chrome://extensions` 中点击本扩展的**重新加载**，再刷新 ChatGPT 页面。当前版本应显示 **1.1.0**。请复制新版全部文件，包括新增的 `return-origin.js`。
 
 ## 使用说明
 
@@ -45,6 +46,16 @@
 高亮以聊天可视区域中线为参考：提问经过中线后，对应节点保持高亮，直到下一次提问经过中线；滚到底部时高亮最新节点。节点很多时，时间线自动滚动以显示当前节点，也可在滑轨上使用滚轮查看其他节点。
 
 向上翻阅时，逐步累积当前聊天已经加载过的提问。切换浏览器标签页后保留这些记录；切换聊天或刷新网页后重新积累。
+
+### 追问后返回原文
+
+1. 选中模型回答中不理解的文字，点击 ChatGPT 自带的“向 ChatGPT 提问”（英文界面为 “Ask ChatGPT”）。
+2. 页面右下方出现 **↩ 返回原文**。你可以继续输入追问、阅读新回答。
+3. 点击按钮，回到刚才选中的段落，并短暂高亮原文字。
+
+连续从不同位置发起追问时，按最近一次在先的顺序逐层返回。最多保留 20 个临时返回点；点击旁边的 × 清空记录，切换聊天或刷新页面也会清空。切换浏览器标签页后仍可继续返回。只选中文字或复制文字不会新增返回点。
+
+如果长对话中的原文已被网页临时卸载，会先滚动尝试加载，再根据消息标识和文字定位；暂时找不到时保留返回点，可加载原文后重试。普通手动输入的追问不会自动创建返回点。
 
 ## 常见问题
 
@@ -66,11 +77,13 @@
 extension/
   manifest.json                 Chrome 扩展配置
   content.js                    页面识别、缓存、样式和交互
+  return-origin.js              原生划词追问的临时返回记录与定位
 tests/
   timeline.test.cjs              基础交互与大量节点测试
   chat-switch.test.cjs           聊天切换与缓存页面隔离测试
   virtual-history.test.cjs       历史累积、卸载与重新挂载测试
   scroll-active.test.cjs         滚动高亮与监听生命周期测试
+  return-origin.test.cjs         划词回跳、连续追问、重挂载与聊天隔离测试
 CHANGELOG.md                    更新记录
 ```
 
@@ -95,10 +108,11 @@ Playwright 仅用于开发，不随扩展运行。`node_modules/`、`test-result
 Compress-Archive -Path extension/* -DestinationPath chatgpt-question-timeline.zip -Force
 ```
 
-包内仅包含 `manifest.json` 和 `content.js`，不包含测试或开发依赖。
+包内仅包含 `manifest.json`、`content.js` 和 `return-origin.js`，不包含测试或开发依赖。
 
 ## 更新记录
 
+- **1.1.0**：新增划词追问后的“返回原文”，保留现有时间线行为。
 - **1.0.13**：新增随阅读位置变化的节点高亮。
 - **1.0.12**：修复向上加载历史时最新节点消失，按聊天累积已加载提问。
 - **1.0.11**：修复切换聊天后混入旧节点。
