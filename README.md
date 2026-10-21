@@ -18,6 +18,14 @@
 
 使用扩展不需要构建，也不需要安装 Node.js。
 
+### 直接下载（推荐）
+
+打开 [最新 Release](https://github.com/zdsun01/chatgpt_voyager/releases/latest)，在 **Assets** 中下载 `chatgpt-question-timeline-版本号.zip`，解压后在 Chrome 扩展管理页选择该文件夹即可，不需要 Git 或 `git pull`。
+
+当前安装包：[chatgpt-question-timeline-1.0.13.zip](https://github.com/zdsun01/chatgpt_voyager/releases/download/v1.0.13/chatgpt-question-timeline-1.0.13.zip)。选择插件 ZIP，不要选择 GitHub 自动生成的 Source code 源码包。仓库目前为私有，需要登录有权限的 GitHub 账号才能下载。
+
+### 从源码安装
+
 1. 克隆本仓库，或通过仓库页面的 **Code → Download ZIP** 下载并解压源码。
 2. 在 Chrome 地址栏打开 `chrome://extensions`。
 3. 打开右上角的**开发者模式**。
