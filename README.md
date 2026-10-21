@@ -22,7 +22,7 @@
 
 打开 [最新 Release](https://github.com/zdsun01/chatgpt_voyager/releases/latest)，在 **Assets** 中下载 `chatgpt-question-timeline-版本号.zip`，解压后在 Chrome 扩展管理页选择该文件夹即可，不需要 Git 或 `git pull`。
 
-当前安装包：[chatgpt-question-timeline-1.0.13.zip](https://github.com/zdsun01/chatgpt_voyager/releases/download/v1.0.13/chatgpt-question-timeline-1.0.13.zip)。选择插件 ZIP，不要选择 GitHub 自动生成的 Source code 源码包。仓库目前为私有，需要登录有权限的 GitHub 账号才能下载。
+当前安装包：[chatgpt-question-timeline-1.0.13.zip](https://github.com/zdsun01/chatgpt_voyager/releases/download/v1.0.13/chatgpt-question-timeline-1.0.13.zip)。选择插件 ZIP，不要选择 GitHub 自动生成的 Source code 源码包。
 
 ### 从源码安装
 
@@ -45,27 +45,6 @@
 高亮以聊天可视区域中线为参考：提问经过中线后，对应节点保持高亮，直到下一次提问经过中线；滚到底部时高亮最新节点。节点很多时，时间线自动滚动以显示当前节点，也可在滑轨上使用滚轮查看其他节点。
 
 向上翻阅时，逐步累积当前聊天已经加载过的提问。切换浏览器标签页后保留这些记录；切换聊天或刷新网页后重新积累。
-
-## 性能与隐私
-
-- 原生 JavaScript，无运行时依赖、后台 service worker、定时轮询、远程请求、统计或持久化存储。
-- 只在匹配的 ChatGPT 网站注入，不申请额外 `permissions`。
-- 仅在内存中保存当前聊天的提问 ID、文字及数值定位信息，不缓存模型回答，不跨聊天保存。
-- 消息 DOM 使用 `WeakRef` 弱引用，避免阻止网页回收已卸载消息；同一消息 ID 只保留一条记录。
-- 时间线采用虚拟列表，仅渲染可见区域附近的按钮，渲染数量由窗口高度决定。
-- 滚动采用被动事件监听，按绘制帧合并处理，二分查找节点位置；滚动时不重扫提问列表、不复制文字。
-- 相关页面变化通过 `MutationObserver` 合并处理，已识别的模型回答内部流式变化不触发列表重扫。
-- 隐藏标签页时停止观察和滚动监听；切换聊天或离开页面时清空缓存。
-
-内存占用随当前聊天已加载提问的数量和文字长度增长。磨砂效果仅覆盖窄滑轨，但仍有图形合成开销。不承诺固定内存数值，也不能降低 ChatGPT 网页自身的内存占用。
-
-## 已知限制
-
-- 仅读取网页加载过的内容，不调用 ChatGPT 私有接口。未加载的历史提问不会提前显示。
-- 已卸载提问的跳转和高亮位置依赖缓存估计，网页重新挂载后校正。点击时最多由 DOM 更新触发三次定位尝试，四秒后结束，不轮询。
-- 缺少稳定消息 ID 的旧页面仅展示已挂载节点，避免重复或错误合并。
-- 图片或文件问题只预览网页可读取的文字；无文字时显示附件提示，不做 OCR。
-- ChatGPT 更新页面结构后可能需要调整选择器。本地测试使用模拟页面，不能替代真实登录页面验收。
 
 ## 常见问题
 
