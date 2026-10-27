@@ -31,7 +31,7 @@
       }
       * { box-sizing: border-box; }
       [hidden] { display: none !important; }
-      .rail { position:fixed; right:12px; top:36px; bottom:6px; width:18px; pointer-events:auto;
+      .rail { position:fixed; right:calc(var(--voyager-side-width,0px) + 12px); top:36px; bottom:6px; width:18px; pointer-events:auto;
         background:var(--rail); border-radius:12px;
         backdrop-filter:blur(10px) saturate(140%);
         box-shadow:inset 1px 0 0 var(--glass-shine), 0 0 0 1px var(--rail-edge), 0 2px 10px #57718a12; }
@@ -51,12 +51,12 @@
         box-shadow:inset 0 0 0 1px #ffffff80, 0 0 0 3px var(--halo); }
       .node:hover span,.node:focus-visible span { width:14px; height:14px; background:var(--hover);
         box-shadow:inset 0 0 0 1px #ffffff80, 0 0 0 2px var(--hover-ring); }
-      .preview { position:fixed; right:42px; width:max-content; max-width:min(380px,calc(100vw - 58px));
+      .preview { position:fixed; right:calc(var(--voyager-side-width,0px) + 42px); width:max-content; max-width:min(380px,calc(100vw - var(--voyager-side-width,0px) - 58px));
         max-height:min(380px,65vh); overflow:auto; pointer-events:auto; padding:14px 16px;
         background:var(--card); color:var(--ink); border:1px solid var(--card-edge); border-radius:10px;
         box-shadow:0 4px 18px #30465e12; font:13px/1.65 system-ui,sans-serif; }
       .text { white-space:pre-wrap; overflow-wrap:anywhere; user-select:text; }
-      @media (max-width:600px) { .rail { right:6px; } .preview { right:36px; } }
+      @media (max-width:600px) { .rail { right:calc(var(--voyager-side-width,0px) + 6px); } .preview { right:calc(var(--voyager-side-width,0px) + 36px); } }
     </style>
     <nav class="rail" aria-label="提问时间线" hidden>
       <div class="viewport"><div class="items"></div></div>

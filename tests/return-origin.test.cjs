@@ -52,10 +52,12 @@ const path = require('node:path');
         const submit = event => {
           event.preventDefault();
           const i=window.nextTurn++;
+          const prompt=document.querySelector(modern ? '[data-composer-markdown]' : '#prompt-textarea').textContent;
           const quoted=Boolean(document.querySelector('#quote-card').textContent);
           document.querySelector('#quote-card').textContent='';
           const article=document.createElement('article');article.dataset.turnKey=`turn-${i}`;
           article.innerHTML=`${quoted ? '<button>1 个已选文本片段</button>' : ''}<div data-message-author-role="user" data-message-id="user-${i}"><div data-user-message-bubble>follow-up ${i}</div></div>`;
+          article.querySelector('[data-user-message-bubble]').textContent=prompt;
           document.getElementById('transcript').append(article);
           setTimeout(() => {article.insertAdjacentHTML('beforeend',window.answer(i));setTimeout(() => article.insertAdjacentHTML('beforeend',window.actions()),40);},40);
           window.chatScroll.scrollTo({top:100000,behavior:'instant'});
@@ -78,6 +80,7 @@ const path = require('node:path');
       };
       const send=async()=>{
         const i=await page.evaluate(()=>window.nextTurn);
+        await page.locator(modern ? '[data-composer-markdown]' : '#prompt-textarea').fill(`follow-up ${i}`);
         if(modern && !nested) await page.locator('[data-composer-markdown]').press('Enter');
         else await page.locator('[data-testid="send-button"]').click();
         await page.locator(`[data-turn-key="turn-${i}"] [aria-label="${retryLabel}"]`).waitFor();

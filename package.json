@@ -1,9 +1,9 @@
 {
   "name": "chatgpt-question-timeline",
   "private": true,
-  "version": "1.1.0",
+  "version": "1.2.2",
   "scripts": {
-    "test": "node tests/timeline.test.cjs && node tests/chat-switch.test.cjs && node tests/virtual-history.test.cjs && node tests/scroll-active.test.cjs && node tests/return-origin.test.cjs"
+    "test": "node tests/timeline.test.cjs && node tests/chat-switch.test.cjs && node tests/virtual-history.test.cjs && node tests/scroll-active.test.cjs && node tests/return-origin.test.cjs && node tests/return-branching.test.cjs && node tests/return-storage.test.cjs && node tests/return-persistence.test.cjs && node tests/return-settling.test.cjs && node tests/return-native.test.cjs && node tests/side-chat.test.cjs"
   },
   "devDependencies": {
     "playwright": "^1.56.0"

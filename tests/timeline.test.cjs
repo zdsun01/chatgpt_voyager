@@ -6,8 +6,8 @@ const path = require('node:path');
 (async () => {
   const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, '../extension/manifest.json'), 'utf8'));
   assert.equal(manifest.manifest_version, 3);
-  assert.equal(manifest.background, undefined);
-  assert.equal(manifest.permissions, undefined);
+  assert.deepEqual(manifest.background, {service_worker:'return-storage.js'});
+  assert.deepEqual(manifest.permissions, ['storage']);
   const browser = await chromium.launch({ channel: 'chrome', headless: true });
   try {
     const page = await browser.newPage({ viewport: { width:1280, height:800 } });

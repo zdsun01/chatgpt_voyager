@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "ChatGPT 提问时间线",
-  "version": "1.1.0",
+  "version": "1.2.2",
   "description": "在 ChatGPT 右侧快速预览、定位自己的提问。轻量、本地运行。",
   "icons": {
     "16": "icons/icon-16.png",
@@ -18,9 +18,22 @@
   },
   "content_scripts": [
     {
-      "matches": ["https://chatgpt.com/*", "https://chat.openai.com/*"],
-      "js": ["content.js", "return-origin.js"],
+      "matches": [
+        "https://chatgpt.com/*",
+        "https://chat.openai.com/*"
+      ],
+      "js": [
+        "content.js",
+        "return-origin.js",
+        "side-chat.js"
+      ],
       "run_at": "document_idle"
     }
-  ]
+  ],
+  "permissions": [
+    "storage"
+  ],
+  "background": {
+    "service_worker": "return-storage.js"
+  }
 }

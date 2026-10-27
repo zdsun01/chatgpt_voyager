@@ -25,11 +25,79 @@
   let route = location.pathname;
   let candidate = null, armed = null, pending = null, staged = null, submitted = null;
   let selectionFrame = 0, retryFrame = 0, actionFrame = 0, expiry = 0, flashTimer = 0, submitTimer = 0;
+  let settleTimer = 0, settling = null;
   let hidden = document.hidden, disposed = false;
   const restoreObserver = new MutationObserver(queueRestore);
   const actionObserver = new MutationObserver(changedActions);
   let observingActions = false;
   let userIds = new WeakMap(), nextUserId = 0;
+  let storageGeneration = 0, loadingStorage = false;
+  let savedRecords = new Map();
+
+  function storageChat() {
+    const id = location.pathname.match(/\/c\/([\w-]{1,160})(?:\/|$)/)?.[1];
+    return id ? `/c/${id}` : null;
+  }
+
+  function storedRecord(record) {
+    const a = record.anchor;
+    if (!a.id || a.id.attr === 'data-content-search-unit-key' ||
+      /^(?:local:|data-content-search-unit-key:)/.test(record.userKey)) return null;
+    return {userKey:record.userKey,prompt:record.prompt,at:record.at,
+      target:record.target?.id || null,
+      anchor:{id:a.id,start:a.start,quote:a.quote,prefix:a.prefix,suffix:a.suffix,top:a.top,viewportOffset:a.viewportOffset}};
+  }
+
+  function storageMessage(message) {
+    try {
+      if (!globalThis.chrome?.runtime?.sendMessage) return Promise.resolve(null);
+      return Promise.resolve(chrome.runtime.sendMessage(message)).catch(()=>null);
+    } catch {return Promise.resolve(null);}
+  }
+
+  function saveRecords() {
+    const chat = storageChat();
+    if (!chat || loadingStorage || disposed) return;
+    for (const key of savedRecords.keys()) if (!records.some(record=>record.userKey === key)) savedRecords.delete(key);
+    const changed = [], snapshots = new Map();
+    for (const record of records) {
+      const stored = storedRecord(record);
+      if (!stored) continue;
+      const serialized = JSON.stringify(stored);
+      if (savedRecords.get(record.userKey) === serialized) continue;
+      changed.push(stored);snapshots.set(record.userKey,serialized);
+      savedRecords.set(record.userKey,serialized);
+    }
+    if (!changed.length) return;
+    const generation = storageGeneration;
+    void storageMessage({type:'voyager:return:save',chat,records:changed}).then(result=>{
+      if (generation !== storageGeneration || result?.ok) return;
+      // Keep session navigation working on storage failure; retry only on another change.
+      for (const [key,value] of snapshots) if (savedRecords.get(key) === value) savedRecords.delete(key);
+    });
+  }
+
+  function loadRecords() {
+    const chat = storageChat(), generation = ++storageGeneration;
+    loadingStorage = Boolean(chat);
+    watchActions();queueActions();
+    if (!chat) return;
+    void storageMessage({type:'voyager:return:load',chat}).then(result=>{
+      if (generation !== storageGeneration || disposed || storageChat() !== chat) return;
+      loadingStorage = false;
+      for (const saved of result?.ok && Array.isArray(result.records) ? result.records.slice(-LIMIT) : []) {
+        if (records.some(record=>record.userKey === saved.userKey)) continue;
+        const record = {userKey:saved.userKey,prompt:saved.prompt,at:saved.at,
+          anchor:{...saved.anchor,key:chat,node:null},user:null,
+          target:saved.target ? {id:saved.target,node:null} : null,button:null};
+        records.push(record);
+        savedRecords.set(record.userKey,JSON.stringify(storedRecord(record)));
+      }
+      records.sort((a,b)=>a.at-b.at);
+      while (records.length > LIMIT) records.shift().button?.deref()?.remove();
+      watchActions();queueActions();saveRecords();
+    });
+  }
 
   function visible(el) {
     if (!el?.isConnected) return false;
@@ -54,7 +122,7 @@
   }
 
   function chatKey(root) {
-    return `${location.pathname}|${root?.getAttribute('data-chatgpt-conversation-selection-target') || ''}`;
+    return storageChat() || `${location.pathname}|${root?.getAttribute('data-chatgpt-conversation-selection-target') || ''}`;
   }
 
   function answerFor(element, root) {
@@ -173,12 +241,31 @@
   }
 
   function userKey(node, root) {
-    for (const attr of ATTRS) {
+    // A turn ID survives late message-ID hydration and assistant regeneration.
+    for (const attr of ['data-turn-key', ...ATTRS.filter(attr => attr !== 'data-turn-key')]) {
       const owner = node.closest(`[${attr}]`);
       if (owner && root.contains(owner)) return `${attr}:${owner.getAttribute(attr)}`;
     }
     if (!userIds.has(node)) userIds.set(node, `local:${++nextUserId}`);
     return userIds.get(node);
+  }
+
+  function promptSignature(node) {
+    // Two rolling hashes + length; retain no prompt text. Ignore layout whitespace
+    // added/removed by the rich-text editor and rendered user bubble.
+    const body = node.querySelector('[data-user-message-bubble]') || node;
+    const walker = document.createTreeWalker(body, NodeFilter.SHOW_TEXT);
+    let text, length = 0, a = 2166136261, b = 5381;
+    while ((text = walker.nextNode())) {
+      for (const char of text.data) {
+        if (/[\s\u200b]/u.test(char)) continue;
+        const value = char.codePointAt(0);
+        a = Math.imul(a ^ value, 16777619) >>> 0;
+        b = (Math.imul(b, 33) ^ value) >>> 0;
+        length++;
+      }
+    }
+    return `${length}:${a}:${b}`;
   }
 
   function messageNodes(root, selector) {
@@ -193,8 +280,8 @@
   }
 
   function watchActions() {
-    if (observingActions || hidden || disposed || (!records.length && !submitted)) return;
-    actionObserver.observe(document.body, {childList:true,subtree:true,attributes:true,
+    if (observingActions || hidden || disposed) return;
+    actionObserver.observe(document.body, {childList:true,subtree:true,attributes:true,characterData:true,
       attributeFilter:[...ATTRS,'aria-label','data-testid','data-app-shell-active-page']});
     observingActions = true;
   }
@@ -202,9 +289,14 @@
   function changedActions(changes) {
     if (changedRoute()) return;
     for (const change of changes) {
-      if (change.type === 'attributes') {
+      if (change.type === 'characterData') {
+        if (submitted && change.target.parentElement?.closest(USER)) {queueActions();return;}
+        if (isNativeQuote(change.target.parentElement?.closest('button'))) {queueActions();return;}
+      } else if (change.type === 'attributes') {
         if (!change.target.hasAttribute('data-voyager-return')) { queueActions(); return; }
       } else {
+        if (submitted && change.target.closest?.(USER)) {queueActions();return;}
+        if (isNativeQuote(change.target.closest?.('button'))) {queueActions();return;}
         // Skip streaming text replacements and our own inserted arrow.
         for (const node of [...change.addedNodes,...change.removedNodes]) {
           if (node.nodeType !== Node.ELEMENT_NODE || node.hasAttribute('data-voyager-return')) continue;
@@ -231,6 +323,38 @@
     }
   }
 
+  function isNativeQuote(button) {
+    return Boolean(button && !button.hasAttribute('data-voyager-return') &&
+      [button.textContent,button.getAttribute('aria-label')].some(text=>
+        /^(?:1\s*个已选文本片段|1\s+selected\s+text(?:\s+(?:passage|snippet|excerpt))?s?)$/i.test(text?.trim() || '')));
+  }
+
+  function nativeQuoteFor(user,root) {
+    const turn=user.closest('[data-turn-key]');
+    if (!turn || !root.contains(turn)) return null;
+    const buttons=Array.from(turn.querySelectorAll('button')).filter(button=>
+      isNativeQuote(button) && visible(button) &&
+      Boolean(button.compareDocumentPosition(user) & Node.DOCUMENT_POSITION_FOLLOWING));
+    return buttons.length===1 ? buttons[0] : null;
+  }
+
+  function makeReturnButton(retry,handler) {
+    const button=document.createElement('button');
+    button.type='button';button.textContent='↩';
+    button.setAttribute('data-voyager-return','');
+    button.setAttribute('aria-label','返回原文');button.title='返回原文';
+    button.className=retry.className;
+    button.style.cssText='display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;padding:0;border:0;border-radius:6px;background:transparent;color:inherit;font:22px/1 system-ui;vertical-align:middle;';
+    button.addEventListener('click',event=>{event.preventDefault();event.stopPropagation();handler();});
+    return button;
+  }
+
+  function placeReturnButton(retry,button) {
+    const slot=retry.parentElement?.matches('[data-state], [data-tooltip-trigger]') && retry.parentElement.children.length===1
+      ? retry.parentElement : retry;
+    if (slot.nextElementSibling!==button) slot.after(button);
+  }
+
   function syncActions() {
     actionFrame = 0;
     if (hidden || disposed || changedRoute()) return;
@@ -240,25 +364,43 @@
     if (records.some(record => record.anchor.key !== key) || (submitted && submitted.anchor.key !== key)) { reset(); return; }
     const users = messageNodes(root, USER);
     if (submitted) {
-      const newest = users.at(-1);
-      if (newest && !submitted.known.has(userKey(newest,root))) {
-        records.push({anchor:submitted.anchor,user:new WeakRef(newest),userKey:userKey(newest,root),target:null,button:null});
-        if (records.length > LIMIT) records.shift().button?.deref()?.remove();
+      // Moving to the composer can remount OLD messages before the new question
+      // arrives. A new DOM node alone is not evidence of a new submission.
+      const matches = users.filter(user => !submitted.known.has(userKey(user,root)) &&
+        !records.some(record => record.userKey === userKey(user,root)) &&
+        promptSignature(user) === submitted.prompt);
+      const newest = matches.length === 1 ? matches[0] : null;
+      if (newest) {
+        records.push({anchor:submitted.anchor,user:new WeakRef(newest),userKey:userKey(newest,root),prompt:submitted.prompt,at:Date.now(),target:null,button:null});
+        if (records.length > LIMIT) {
+          const removed = records.shift();removed.button?.deref()?.remove();savedRecords.delete(removed.userKey);
+        }
         submitted = null; staged = null; clearTimeout(submitTimer);
       }
     }
     const answers = messageNodes(root, ASSISTANT);
     const retryButtons = Array.from(root.querySelectorAll('button')).filter(button => isRetry(button) && visible(button));
+    const claimedAnswers = new Set();
+    const claimedUsers = new Set();
     for (const record of records) {
-      const userIndex = users.findIndex(user => userKey(user,root) === record.userKey);
+      let userIndex = users.findIndex(user => userKey(user,root) === record.userKey);
+      if (userIndex < 0) {
+        // Message IDs can be added after an optimistic bubble has mounted.
+        userIndex = users.findIndex(user => user === record.user?.deref() && promptSignature(user) === record.prompt);
+        if (userIndex >= 0) record.userKey = userKey(users[userIndex],root);
+      }
       let answer = record.target ? locateMessage(record.target,root) : null;
       const nextUser = userIndex < 0 ? null : users[userIndex+1];
       if (userIndex >= 0) {
+        record.user = new WeakRef(users[userIndex]);
         // Bind to this specific follow-up, never to whichever answer is last on screen.
         answer = answers.find(node => Boolean(users[userIndex].compareDocumentPosition(node) & Node.DOCUMENT_POSITION_FOLLOWING) &&
           (!nextUser || Boolean(node.compareDocumentPosition(nextUser) & Node.DOCUMENT_POSITION_FOLLOWING))) || null;
       }
-      if (!answer) continue;
+      if (!answer || claimedAnswers.has(answer)) {
+        record.button?.deref()?.remove();record.button=null;continue;
+      }
+      claimedAnswers.add(answer);
       record.target = {id:identity(answer,root),node:new WeakRef(answer)};
       const retry = retryButtons.find(button => {
         if (!(answer.compareDocumentPosition(button) & Node.DOCUMENT_POSITION_FOLLOWING)) return false;
@@ -269,24 +411,52 @@
         return previous === answer;
       });
       if (!retry) continue;
+      claimedUsers.add(record.userKey);
+      for (const native of root.querySelectorAll('[data-voyager-return-native]')) {
+        if (native.getAttribute('data-voyager-return-for')===record.userKey) native.remove();
+      }
       let button = record.button?.deref();
       if (!button?.isConnected) {
-        button = document.createElement('button');
-        button.type = 'button'; button.textContent = '↩';
-        button.setAttribute('data-voyager-return','');
-        button.setAttribute('aria-label','返回原文');
-        button.title = '返回原文';
-        button.className = retry.className;
-        button.style.cssText = 'display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;padding:0;border:0;border-radius:6px;background:transparent;color:inherit;font:22px/1 system-ui;vertical-align:middle;';
-        button.addEventListener('click',event => {event.preventDefault();event.stopPropagation();returnToOrigin(record);});
+        button = makeReturnButton(retry,()=>returnToOrigin(record));
         record.button = new WeakRef(button);
       }
-      // Preserve a native tooltip wrapper when retry itself is nested in one.
-      const slot = retry.parentElement?.matches('[data-state], [data-tooltip-trigger]') && retry.parentElement.children.length === 1
-        ? retry.parentElement : retry;
-      if (slot.nextElementSibling !== button) slot.after(button);
+      button.setAttribute('data-voyager-return-for',record.userKey);
+      placeReturnButton(retry,button);
     }
+    // Native quote references survive refresh even when our capture was missed
+    // (e.g. formulas, old versions, storage eviction). Delegate to that exact
+    // message's own control; never infer a source from the latest visible reply.
+    const nativeButtons=Array.from(root.querySelectorAll('[data-voyager-return-native]'));
+    const keep=new Set();
+    for (let i=0;i<users.length;i++) {
+      const user=users[i],userId=userKey(user,root);
+      if (claimedUsers.has(userId) || !nativeQuoteFor(user,root)) continue;
+      const next=users[i+1];
+      const answer=answers.find(node=>Boolean(user.compareDocumentPosition(node)&Node.DOCUMENT_POSITION_FOLLOWING) &&
+        (!next || Boolean(node.compareDocumentPosition(next)&Node.DOCUMENT_POSITION_FOLLOWING)));
+      if (!answer || claimedAnswers.has(answer)) continue;
+      const retry=retryButtons.find(button=>Boolean(answer.compareDocumentPosition(button)&Node.DOCUMENT_POSITION_FOLLOWING) &&
+        (!next || Boolean(button.compareDocumentPosition(next)&Node.DOCUMENT_POSITION_FOLLOWING)) &&
+        answers.findLast(node=>Boolean(node.compareDocumentPosition(button)&Node.DOCUMENT_POSITION_FOLLOWING))===answer);
+      if (!retry) continue;
+      let button=nativeButtons.find(button=>button.getAttribute('data-voyager-return-for')===userId);
+      if (!button) {
+        button=makeReturnButton(retry,()=>{
+          if (hidden || disposed || changedRoute()) return;
+          const current=scope();
+          if (!current || chatKey(current)!==key) return;
+          const owner=messageNodes(current,USER).find(node=>userKey(node,current)===userId);
+          const quote=owner && nativeQuoteFor(owner,current);
+          if (quote) {stopRestore();clearFlash();refreshButtons();quote.click();}
+        });
+        button.setAttribute('data-voyager-return-native','');
+        button.setAttribute('data-voyager-return-for',userId);
+      }
+      claimedAnswers.add(answer);keep.add(button);placeReturnButton(retry,button);
+    }
+    for (const button of nativeButtons) if (!keep.has(button)) button.remove();
     refreshButtons();
+    saveRecords();
   }
 
   function markSubmitted() {
@@ -297,9 +467,11 @@
     const quote = staged.quote.trim().slice(0,24);
     // If the user removes the native quote before sending, there is no return link.
     if (!quote || !composer?.textContent.replace(/\s+/g,' ').includes(quote.replace(/\s+/g,' '))) { staged = null; return; }
-    submitted = {anchor:staged,known:new Set(messageNodes(root,USER).map(user => userKey(user,root)))};
+    submitted = {anchor:staged,prompt:promptSignature(editor),known:new Set([
+      ...messageNodes(root,USER).map(user => userKey(user,root)),...records.map(record => record.userKey)
+    ])};
     clearTimeout(submitTimer);
-    submitTimer = setTimeout(() => { submitted = null; if (!records.length) {actionObserver.disconnect();observingActions=false;} },120000);
+    submitTimer = setTimeout(() => { submitted = null; },120000);
     watchActions(); queueActions();
   }
 
@@ -307,7 +479,17 @@
     restoreObserver.disconnect();
     cancelAnimationFrame(retryFrame); retryFrame = 0;
     clearTimeout(expiry); expiry = 0;
+    clearTimeout(settleTimer);settleTimer=0;settling=null;
     pending = null;
+  }
+
+  function finishRestore(record, success) {
+    stopRestore();
+    record.failed = !success;
+    candidate = armed = null;
+    if (success) flashTimer = setTimeout(clearFlash,1800);
+    else clearFlash();
+    refreshButtons();
   }
 
   function clearFlash() {
@@ -316,10 +498,12 @@
   }
 
   function reset() {
+    storageGeneration++;loadingStorage=false;savedRecords.clear();
     stopRestore(); clearFlash();
     candidate = armed = staged = submitted = null;
     clearTimeout(submitTimer);
     for (const record of records) record.button?.deref()?.remove();
+    for (const button of document.querySelectorAll('[data-voyager-return-native]')) button.remove();
     records.length = 0;
     actionObserver.disconnect(); observingActions = false;
     userIds = new WeakMap();
@@ -329,7 +513,9 @@
 
   function changedRoute() {
     if (route === location.pathname) return false;
-    route = location.pathname; reset(); return true;
+    // Pending writes were dispatched when the relation changed; never write the
+    // previous chat's records under the new URL during navigation.
+    route = location.pathname; reset();loadRecords(); return true;
   }
 
   function confirmAsk(event) {
@@ -344,7 +530,7 @@
   }
 
   function locateMessage(anchor, root) {
-    const live = anchor.node.deref();
+    const live = anchor.node?.deref();
     if (live?.isConnected && root.contains(live) && visible(live) && sameIdentity(live, anchor, root)) return live;
     if (!anchor.id) return null;
     const {attr, value, part} = anchor.id;
@@ -394,28 +580,44 @@
   function tryRestore() {
     retryFrame = 0;
     if (!pending || hidden || disposed || changedRoute()) return;
+    clearTimeout(settleTimer);
+    // Only while a click is in flight. This also detects native scroll corrections
+    // and CSS/layout-only changes that do not produce transcript mutations.
+    settleTimer = setTimeout(queueRestore,100);
     const record = pending, anchor = record.anchor, root = scope();
-    if (!root || chatKey(root) !== anchor.key) { reset(); return; }
+    if (!root) return;
+    if (chatKey(root) !== anchor.key) {reset();return;}
     const message = locateMessage(anchor, root);
     if (!message) return;
-    const offset = findOffset(message, anchor);
-    if (offset < 0) return;
-    const range = rangeAt(message, offset, anchor.quote.length);
+    let range = settling.range;
+    // Retain a Range only for this bounded jump, never in saved return records.
+    if (!range || !message.contains(range.startContainer) || !message.contains(range.endContainer) || range.toString() !== anchor.quote) {
+      const offset = findOffset(message, anchor);
+      if (offset < 0) return;
+      range = rangeAt(message, offset, anchor.quote.length);
+    }
     if (!range) return;
     const scroll = scroller(root), view = metrics(scroll);
     const rect = range.getBoundingClientRect();
     if (!rect.width && !rect.height) return;
+    const now = performance.now();
+    if (settling.firstMatch === null) settling.firstMatch = now;
     const desired = Math.min(anchor.viewportOffset, scroll.clientHeight * .55);
-    scroll.scrollTo({top:Math.max(0, scroll.scrollTop + (rect.top - view.top) / view.scale - desired), behavior:'instant'});
-    stopRestore();
-    record.failed = false;
-    candidate = armed = null;
-    clearFlash();
-    if (CSS.highlights && typeof Highlight !== 'undefined') {
-      CSS.highlights.set('chatgpt-voyager-origin', new Highlight(range));
-      flashTimer = setTimeout(clearFlash, 1800);
+    const target = Math.max(0,Math.min(scroll.scrollHeight-scroll.clientHeight,
+      scroll.scrollTop + (rect.top - view.top) / view.scale - desired));
+    if (Math.abs(scroll.scrollTop-target) > 2) {
+      settling.lastCorrection=now;
+      scroll.scrollTo({top:target,behavior:'instant'});
     }
-    refreshButtons();
+    if (settling.range !== range && CSS.highlights && typeof Highlight !== 'undefined') {
+      CSS.highlights.set('chatgpt-voyager-origin', new Highlight(range));
+    }
+    settling.range=range;
+    const after = range.getBoundingClientRect();
+    settling.visible=after.bottom>view.top && after.top<view.top+scroll.clientHeight*view.scale;
+    // The first successful scroll is provisional: virtual-list measurements,
+    // focus restoration and formula/image layout can move it on later frames.
+    if (settling.visible && now-settling.firstMatch>=1000 && now-settling.lastCorrection>=250) finishRestore(record,true);
   }
 
   function queueRestore() {
@@ -429,13 +631,20 @@
     if (!root || chatKey(root) !== anchor.key) { reset(); return; }
     record.failed = false;
     pending = record;
+    settling={range:null,firstMatch:null,lastCorrection:performance.now(),visible:false};
+    restoreObserver.observe(root, {childList:true,subtree:true,characterData:true,attributes:true,attributeFilter:[...ATTRS,'style','class','hidden']});
+    expiry = setTimeout(()=>{
+      // Never claim success merely because scrollTo() was called.
+      const scroll=scroller(root),view=metrics(scroll),rect=settling?.range?.getBoundingClientRect();
+      finishRestore(record,Boolean(rect?.height && root.contains(settling.range.startContainer) &&
+        settling.range.toString()===anchor.quote && rect.bottom>view.top && rect.top<view.top+scroll.clientHeight*view.scale));
+    },5000);
     tryRestore();
-    if (!pending) return;
     // Approximate scroll only requests remounting; highlighting requires an exact match.
-    restoreObserver.observe(root, {childList:true,subtree:true,characterData:true,attributes:true,attributeFilter:ATTRS});
-    const scroll = scroller(root);
-    scroll.scrollTo({top:Math.max(0,anchor.top-Math.min(anchor.viewportOffset,scroll.clientHeight*.55)),behavior:'instant'});
-    expiry = setTimeout(() => {stopRestore();record.failed=true;refreshButtons();},5000);
+    if (settling?.firstMatch === null) {
+      const scroll = scroller(root);
+      scroll.scrollTo({top:Math.max(0,anchor.top-Math.min(anchor.viewportOffset,scroll.clientHeight*.55)),behavior:'instant'});
+    }
     queueRestore(); refreshButtons();
   }
 
@@ -454,7 +663,7 @@
   document.addEventListener('submit',event => {
     if (event.target.querySelector?.(EDITOR)) markSubmitted();
   },true);
-  const interrupt = () => {if (pending) {stopRestore();refreshButtons();}};
+  const interrupt = () => {if (pending) {stopRestore();clearFlash();refreshButtons();}};
   document.addEventListener('wheel',interrupt,{passive:true,capture:true});
   document.addEventListener('touchstart',interrupt,{passive:true,capture:true});
   document.addEventListener('keydown',event => {
@@ -476,6 +685,11 @@
     if (!hidden) {watchActions();queueActions();}
   });
   window.addEventListener('pagehide',() => {disposed=true;reset();});
-  window.addEventListener('pageshow',() => {disposed=false;hidden=document.hidden;changedRoute();watchActions();queueActions();});
+  window.addEventListener('pageshow',event => {
+    disposed=false;hidden=document.hidden;
+    if (!changedRoute() && event.persisted) loadRecords();
+    watchActions();queueActions();
+  });
   document.documentElement.append(host);
+  loadRecords();
 })();
